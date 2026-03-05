@@ -120,6 +120,38 @@ typedef NTSTATUS(NTAPI* NtCreateThreadEx_t)(
 	PVOID AttributeList        // NULL
 	);
 
+void CheckMemoryProtect(HANDLE hProcess, LPVOID remoteEntry)
+{
+	MEMORY_BASIC_INFORMATION mbi;
+	SIZE_T result = VirtualQueryEx(
+		hProcess,          // 
+		remoteEntry,       // 
+		&mbi,              // 
+		sizeof(mbi)        // 
+	);
+
+	if (result == 0) {
+		printf("VirtualQueryEx failed: %lu\n", GetLastError());
+		return;
+	}
+
+	printf("BaseAddress: %p\n", mbi.BaseAddress);
+	printf("RegionSize: 0x%Ix\n", mbi.RegionSize);
+	printf("State: 0x%X\n", mbi.State);
+	printf("Protect: 0x%X\n", mbi.Protect);
+	printf("Type: 0x%X\n", mbi.Type);
+
+	// 
+	if (mbi.Protect == PAGE_EXECUTE_READ ||
+		mbi.Protect == PAGE_EXECUTE_READWRITE ||
+		mbi.Protect == PAGE_EXECUTE_WRITECOPY) {
+		printf("Entry point in execute area.\n");
+	}
+	else {
+		printf("Entry point dont have execute privilege.\n");
+	}
+}
+
 int main()
 {
 	//lay cac WINAPI can thiet
@@ -178,7 +210,9 @@ int main()
 
 	// Tao tien trinh tu section // NtCreateProcessEX da chay
 	HANDLE hProcess = NULL;
-	status = NtCreateProcessEx(&hProcess, PROCESS_ALL_ACCESS, NULL, GetCurrentProcess(), 0x00000004, // Ke thua Handles
+	status = NtCreateProcessEx(&hProcess, PROCESS_CREATE_THREAD | 
+		PROCESS_QUERY_INFORMATION | PROCESS_VM_OPERATION | PROCESS_VM_WRITE | PROCESS_VM_READ,
+		NULL, GetCurrentProcess(), 0x00000004, // Ke thua Handles
 		hSection, NULL, NULL, FALSE);
 	if (!NT_SUCCESS(status))
 	{
@@ -232,6 +266,9 @@ int main()
 	{
 		printf("%02X", check[j]);;
 	}
+
+	CheckMemoryProtect(hProcess, remoteEntry);
+
 	HANDLE hThread = NULL;
 	status = NtCreateThreadEx(&hThread,
 		THREAD_ALL_ACCESS,
@@ -239,17 +276,35 @@ int main()
 		hProcess,
 		remoteEntry,
 		NULL,
-		FALSE,
+		TRUE,
 		0,0,0,
 		NULL);
-	if (!NT_SUCCESS(status))
-	{
-		std::cerr << "\nNtCreateThreadEx failed\n";
-		return 1;
-	}
-	// Rollback, xoa dau vet
-	WaitForSingleObject(hThread, 1000);
+	printf("\nNtCreateThreadEx status: 0x%X\n", status);
+	//HANDLE hThread = CreateRemoteThread(
+	//	hProcess,          // tien trinh remote
+	//	NULL,              // security attributes
+	//	0,                 // stack size
+	//	(LPTHREAD_START_ROUTINE)remoteEntry, // entry point
+	//	NULL,              // tham so cho thread
+	//	0,                 // flags (0 = run immidiate)
+	//	NULL               // thread ID
+	//);
 
+	//if (hThread == NULL) {
+	//	printf("CreateRemoteThread failed: %lu\n", GetLastError());
+	//}
+	//else {
+	//	printf("Thread created successfully!\n");
+	//}
+
+	//if (!NT_SUCCESS(status))
+	//{
+	//	std::cerr << "\nNtCreateThreadEx failed\n";
+	//	return 1;
+	//}
+	//// Rollback, xoa dau vet
+	//WaitForSingleObject(hThread, 1000);
+	ResumeThread(hThread);
 	CloseHandle(hProcess);
 	CloseHandle(hThread);
 	return 0;
